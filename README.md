@@ -153,6 +153,8 @@ cd chatterbox-finetuning
 pip install -r requirements.txt
 ```
 
+That requirements file pins Torch 2.6. On an RTX 5070 those wheels have no Blackwell kernels. The isolated Python 3.12 procedure, dependency manifest, and Dustin profile are in `deploy/FRESH_ENV.md`. The default profile does not train until `TTS_CONFIRM_TRAIN=1`, and it never reads or writes the Lewis dataset or checkpoints. `TTS_PROFILE=upstream` keeps this file's committed Nano/Turbo settings.
+
 ---
 
 ## ⚙️ Configuration and Model Download

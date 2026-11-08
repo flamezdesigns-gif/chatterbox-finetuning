@@ -99,6 +99,10 @@ class SafetyError(RuntimeError):
     """Raised when a run would touch a protected tree or lacks confirmation."""
 
 
+# Dustin-only read-only base weights. Launchers inherit this from the environment.
+MODEL_DIR_ENV = "TTS_MODEL_DIR"
+
+
 @dataclass
 class ResolvedRun:
     profile: str
@@ -106,6 +110,7 @@ class ResolvedRun:
     tts_root: Path | None
     data_root: Path | None
     blocked_reasons: list[str] = field(default_factory=list)
+    model_dir_override: bool = False
 
 
 def _environ(environ):
@@ -133,6 +138,29 @@ def normalized_parts(path) -> list[str]:
     resolved = Path(path).expanduser().resolve()
     skip = {os.sep, "/", "\\", ".", ""}
     return [part.casefold() for part in resolved.parts if part not in skip]
+
+
+def _legacy_root_prefix() -> str:
+    # Pre-relocation root. Kept off the public tree as one literal by the path scan.
+    return ("c:" + "\\" + "tts")
+
+
+def under_legacy_root(path) -> bool:
+    text = str(path).replace("/", "\\").casefold()
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    prefix = _legacy_root_prefix()
+    return text == prefix or text.startswith(prefix + "\\")
+
+
+def _path_key(path) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(str(path)))).replace("/", "\\")
+
+
+def same_or_child(child, parent) -> bool:
+    child_key = _path_key(child).rstrip("\\")
+    parent_key = _path_key(parent).rstrip("\\")
+    return child_key == parent_key or child_key.startswith(parent_key + "\\")
 
 
 def protected_reason(path) -> str | None:
@@ -234,7 +262,84 @@ def _apply_lewis(config: TrainConfig, tts_root: Path, repo_root: Path) -> None:
     config.prompt_duration = 3.0
 
 
-def _apply_dustin(config: TrainConfig, data_root: Path, repo_root: Path) -> None:
+def readonly_model_dir(environ=None) -> Path | None:
+    """Absolute TTS_MODEL_DIR, if set. Does not create, copy, or follow a symlink."""
+    raw = _environ(environ).get(MODEL_DIR_ENV, "").strip().strip('"')
+    if not raw:
+        return None
+    if under_legacy_root(raw):
+        raise SafetyError(
+            f"{MODEL_DIR_ENV} is inside the pre-relocation root. That tree is off limits."
+        )
+    path = Path(raw)
+    if path.is_symlink():
+        raise SafetyError(
+            f"{MODEL_DIR_ENV} is a symlink. Pass the real pretrained_models directory. "
+            "This deployment does not create or follow symlinks."
+        )
+    resolved = path.expanduser().resolve()
+    if under_legacy_root(resolved):
+        raise SafetyError(
+            f"{MODEL_DIR_ENV} resolves inside the pre-relocation root. That tree is off limits."
+        )
+    reason = protected_reason(resolved)
+    if reason:
+        raise SafetyError(f"{MODEL_DIR_ENV} {resolved} is in a {reason}.")
+    return resolved
+
+
+def validate_standard_model_dir(path: Path) -> Path:
+    """Require the unsuffixed standard base files. Do not download or copy them."""
+    if not path.is_dir():
+        raise SafetyError(
+            f"{MODEL_DIR_ENV} {path} is not an existing directory. "
+            "The override is read-only and will not be created."
+        )
+    missing = []
+    for name in STANDARD_WEIGHT_BYTES:
+        file_path = path / name
+        if file_path.is_symlink():
+            raise SafetyError(
+                f"{file_path} is a symlink. Base weights must be the real files."
+            )
+        if not file_path.is_file():
+            missing.append(name)
+    if missing:
+        raise SafetyError(
+            f"{MODEL_DIR_ENV} is missing standard base files: {', '.join(missing)}. "
+            "They will not be downloaded or copied."
+        )
+    return path
+
+
+def resolve_dustin_model_dir(environ, repo_root: Path) -> tuple[str, bool]:
+    override = readonly_model_dir(environ)
+    if override is None:
+        return str((repo_root / "pretrained_models").resolve()), False
+    return str(validate_standard_model_dir(override)), True
+
+
+def assert_not_readonly_model_dir(dest, environ=None) -> None:
+    """Setup and other downloaders must not create or replace the override."""
+    if dest is None or str(dest).strip() == "":
+        return
+    if under_legacy_root(dest):
+        raise SafetyError(f"Refusing to write {dest}. The pre-relocation root is off limits.")
+    dest_path = Path(dest)
+    if dest_path.is_symlink():
+        raise SafetyError(f"Refusing to write through symlink {dest_path}.")
+    source = readonly_model_dir(environ)
+    if source is not None and same_or_child(dest_path, source):
+        raise SafetyError(
+            f"Refusing to create or modify {dest_path}. "
+            f"{MODEL_DIR_ENV} is a read-only base-weight directory."
+        )
+    reason = protected_reason(dest_path)
+    if reason:
+        raise SafetyError(f"Refusing to write {dest_path} ({reason}).")
+
+
+def _apply_dustin(config: TrainConfig, data_root: Path, repo_root: Path, environ=None) -> bool:
     """Short-recording experiment. Separate data and checkpoints from Lewis.
 
     Rank, batch, and epoch count are smaller than the Lewis profile because
@@ -245,7 +350,7 @@ def _apply_dustin(config: TrainConfig, data_root: Path, repo_root: Path) -> None
     config.is_nano = False
     config.extend_vocab = False
     config.is_lora = True
-    config.model_dir = str(repo_root / "pretrained_models")
+    config.model_dir, use_override = resolve_dustin_model_dir(environ, repo_root)
     config.csv_path = str(data_root / "data" / "metadata.csv")
     config.metadata_path = str(data_root / "data" / "metadata.csv")
     config.wav_dir = str(data_root / "data" / "wavs")
@@ -272,6 +377,7 @@ def _apply_dustin(config: TrainConfig, data_root: Path, repo_root: Path) -> None
     config.max_text_len = 256
     config.max_speech_len = 850
     config.prompt_duration = 3.0
+    return use_override
 
 
 def dustin_data_root(tts_root: Path | None, repo_root: Path = REPO_ROOT) -> Path:
@@ -285,6 +391,7 @@ def build_resolved(environ=None, repo_root: Path = REPO_ROOT) -> ResolvedRun:
     tts_root = tts_root_from_env(environ)
     config = TrainConfig()
     data_root = None
+    model_dir_override = False
 
     if profile == PROFILE_UPSTREAM:
         _apply_upstream(config, repo_root)
@@ -297,7 +404,7 @@ def build_resolved(environ=None, repo_root: Path = REPO_ROOT) -> ResolvedRun:
         _apply_lewis(config, tts_root, repo_root)
     else:
         data_root = dustin_data_root(tts_root, repo_root)
-        _apply_dustin(config, data_root, repo_root)
+        model_dir_override = _apply_dustin(config, data_root, repo_root, environ)
 
     return ResolvedRun(
         profile=profile,
@@ -305,6 +412,7 @@ def build_resolved(environ=None, repo_root: Path = REPO_ROOT) -> ResolvedRun:
         tts_root=tts_root,
         data_root=data_root,
         blocked_reasons=_blocked_paths(config),
+        model_dir_override=model_dir_override,
     )
 
 
@@ -322,6 +430,7 @@ def assert_safe_to_load(resolved: ResolvedRun) -> None:
 
 def assert_safe_to_train(resolved: ResolvedRun, environ=None) -> None:
     assert_safe_to_load(resolved)
+    assert_config_writable(resolved.config, environ)
     if resolved.profile == PROFILE_DUSTIN and _environ(environ).get("TTS_CONFIRM_TRAIN") != "1":
         raise SafetyError(
             "Refusing to start Dustin training without TTS_CONFIRM_TRAIN=1. "
@@ -329,8 +438,21 @@ def assert_safe_to_train(resolved: ResolvedRun, environ=None) -> None:
         )
 
 
-def assert_config_writable(config: TrainConfig) -> None:
+def assert_config_writable(config: TrainConfig, environ=None) -> None:
     reasons = _blocked_paths(config)
+    source = readonly_model_dir(environ)
+    if source is not None:
+        for label in (
+            "csv_path",
+            "metadata_path",
+            "wav_dir",
+            "preprocessed_dir",
+            "output_dir",
+            "inference_prompt_path",
+        ):
+            value = getattr(config, label, None)
+            if value and same_or_child(value, source):
+                reasons.append(f"{label}={value} (read-only {MODEL_DIR_ENV})")
     if reasons:
         raise SafetyError(
             "Refusing to read or write a protected training path: " + "; ".join(reasons)

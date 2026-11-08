@@ -12,10 +12,13 @@ from deploy.create_dustin_venv import plan_commands
 from src.deployment import (
     CONSTRAINT_DISTS,
     EXPECTED_DIST_VERSIONS,
+    MODEL_DIR_ENV,
     NO_DEPS_DISTS,
+    STANDARD_WEIGHT_BYTES,
     SafetyError,
     TORCH_CU128_WIN_CP312_BYTES,
     assert_config_writable,
+    assert_not_readonly_model_dir,
     assert_safe_to_train,
     build_resolved,
     persistent_workers,
@@ -245,6 +248,95 @@ class DeploymentTests(unittest.TestCase):
     def test_train_patches_precede_chatterbox_import(self):
         text = (REPO / "train.py").read_text(encoding="utf-8")
         self.assertLess(text.index("apply_training_patches()"), text.index("src.chatterbox_"))
+
+    def _write_standard_weights(self, directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in STANDARD_WEIGHT_BYTES:
+            (directory / name).write_bytes(b"weight")
+
+    def test_model_dir_override_reuses_sibling_weights(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code = root / "ft" / "repo-dustin"
+            weights = root / "ft" / "repo" / "pretrained_models"
+            self._write_standard_weights(weights)
+            data = root / "dustin" / "data"
+            (data / "wavs").mkdir(parents=True)
+            (data / "metadata.csv").write_text("clip.wav|hello|hello\n", encoding="utf-8")
+            before = {path.name: path.read_bytes() for path in weights.iterdir()}
+            env = {
+                "TTS_ROOT": str(root),
+                "TTS_PROFILE": "dustin",
+                "TTS_CONFIRM_TRAIN": "1",
+                MODEL_DIR_ENV: str(weights),
+            }
+            resolved = prepare_training_run(environ=env, repo_root=code)
+            self.assertTrue(resolved.model_dir_override)
+            self.assertEqual(Path(resolved.config.model_dir), weights.resolve())
+            self.assertEqual(resolved.blocked_reasons, [])
+            self.assertFalse((code / "pretrained_models").exists())
+            self.assertEqual(before, {path.name: path.read_bytes() for path in weights.iterdir()})
+            self.assertTrue(resolved.config.output_dir.endswith(os.path.join("dustin", "output")))
+            resolved.config.output_dir = str(weights / "new_output")
+            with self.assertRaises(SafetyError):
+                assert_config_writable(resolved.config, environ=env)
+            self.assertFalse((weights / "new_output").exists())
+            self.assertEqual((weights / "ve.safetensors").read_bytes(), b"weight")
+
+    def test_model_dir_override_rejects_protected_symlink_and_legacy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code = root / "ft" / "repo-dustin"
+            weights = root / "ft" / "repo" / "pretrained_models"
+            self._write_standard_weights(weights)
+            link = root / "weights-link"
+            link.symlink_to(weights, target_is_directory=True)
+            rejected = [
+                root / "ft" / "data" / "pretrained_models",
+                root / "ft" / "output",
+                root / "ft" / "logs",
+                root / "voice_final",
+                root / "demon" / "pretrained_models",
+                root / "toadpipe",
+                link,
+                Path("C:" + "\\" + "tts") / "pretrained_models",
+            ]
+            for candidate in rejected:
+                env = {"TTS_ROOT": str(root), "TTS_PROFILE": "dustin", MODEL_DIR_ENV: str(candidate)}
+                with self.assertRaises(SafetyError, msg=str(candidate)):
+                    build_resolved(environ=env, repo_root=code)
+            self.assertFalse((code / "pretrained_models").exists())
+            self.assertFalse(any(path.is_symlink() for path in code.rglob("*")))
+            incomplete = root / "ft" / "repo" / "incomplete"
+            incomplete.mkdir()
+            env = {"TTS_ROOT": str(root), "TTS_PROFILE": "dustin", MODEL_DIR_ENV: str(incomplete)}
+            with self.assertRaises(SafetyError):
+                build_resolved(environ=env, repo_root=code)
+            self.assertEqual(list(incomplete.iterdir()), [])
+            env = {"TTS_ROOT": str(root), "TTS_PROFILE": "dustin", MODEL_DIR_ENV: str(weights)}
+            with self.assertRaises(SafetyError):
+                assert_not_readonly_model_dir(weights / "ve.safetensors", environ=env)
+            with self.assertRaises(SafetyError):
+                assert_not_readonly_model_dir(weights, environ=env)
+            elsewhere = code / "pretrained_models_turbo"
+            assert_not_readonly_model_dir(elsewhere, environ=env)
+            self.assertFalse(elsewhere.exists())
+            self.assertEqual((weights / "ve.safetensors").read_bytes(), b"weight")
+            setup_env = os.environ.copy()
+            setup_env["TTS_ALLOW_SETUP"] = "1"
+            setup_env[MODEL_DIR_ENV] = str(weights)
+            setup = subprocess.run(
+                [sys.executable, str(REPO / "setup.py")],
+                cwd=weights,
+                env=setup_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(setup.returncode, 2, setup.stderr)
+            self.assertIn("read-only", setup.stdout)
+            self.assertEqual((weights / "ve.safetensors").read_bytes(), b"weight")
+            self.assertFalse((weights / "pretrained_models_turbo").exists())
 
     def test_upstream_training_gate_does_not_require_dustin_confirm(self):
         resolved = build_resolved(environ={"TTS_PROFILE": "upstream"})

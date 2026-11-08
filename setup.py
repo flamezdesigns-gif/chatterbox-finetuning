@@ -1,13 +1,21 @@
 import os
 import sys
 
-from src.deployment import protected_reason
-
 if __name__ == "__main__" and os.environ.get("TTS_ALLOW_SETUP") != "1":
     print("Refusing to download or write model files.")
     print("Set TTS_ALLOW_SETUP=1 to run the existing setup downloader.")
     print("Existing weight files are left untouched.")
     raise SystemExit(2)
+
+if __name__ == "__main__":
+    from src.config import TrainConfig
+    from src.deployment import SafetyError, assert_not_readonly_model_dir
+
+    try:
+        assert_not_readonly_model_dir(TrainConfig().model_dir)
+    except SafetyError as exc:
+        print(exc)
+        raise SystemExit(2)
 
 import json
 import requests
@@ -66,6 +74,14 @@ CHATTERBOX_FILES = {
 
 def download_file(url, dest_path):
     """Downloads a file with a progress bar. Uses a .part file to avoid keeping partial downloads."""
+    from src.deployment import SafetyError, assert_not_readonly_model_dir
+
+    try:
+        assert_not_readonly_model_dir(dest_path)
+        assert_not_readonly_model_dir(dest_path + ".part")
+    except SafetyError as exc:
+        print(exc)
+        sys.exit(2)
 
     if os.path.exists(dest_path):
         print(f"File already exists: {dest_path}")
@@ -188,9 +204,12 @@ def test_merge_tokenizer_process(tokenizer_path):
 def main():
 
     print("--- Chatterbox Pretrained Model Setup ---\n")
-    blocked = protected_reason(DEST_DIR)
-    if blocked:
-        print(f"Refusing to write model files to {DEST_DIR} ({blocked}).")
+    from src.deployment import SafetyError, assert_not_readonly_model_dir
+
+    try:
+        assert_not_readonly_model_dir(DEST_DIR)
+    except SafetyError as exc:
+        print(exc)
         raise SystemExit(2)
 
     # 1. Create the directory if it doesn't exist

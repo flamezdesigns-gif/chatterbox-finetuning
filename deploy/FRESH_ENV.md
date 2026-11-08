@@ -15,6 +15,14 @@ set PYTHON312=YOUR_PYTHON_3_12_BASE_INTERPRETER
 
 `PYTHON312` is optional when the `py -3.12` launcher works. Point it at a base interpreter, not at an existing virtual environment.
 
+`TTS_MODEL_DIR` is the Dustin profile's read-only standard base-weight directory. Leave it unset only when `pretrained_models` already sits inside this checkout. A side-by-side checkout must set it to the existing unsuffixed directory and must not copy those files:
+
+```bat
+set TTS_MODEL_DIR=%TTS_ROOT%\ft\repo\pretrained_models
+```
+
+The variable is refused when it is a symlink, when it is inside `ft\data`, `ft\output`, `ft\logs`, `voice_final`, `demon`, `toadpipe`, or the pre-relocation root, or when the standard files `ve.safetensors`, `t3_cfg.safetensors`, `s3gen.safetensors`, `conds.pt`, and `tokenizer.json` are absent. `setup.py` cannot create or replace anything inside that directory, including when `TTS_ALLOW_SETUP=1`. Keep the dirty checkout at `ft\repo` and put this code in the sibling `ft\repo-dustin`. Run the launchers from `ft\repo-dustin`; they already take their repository root from their own location.
+
 ## Create and check
 
 From `scripts\windows` inside this repository:

@@ -55,12 +55,14 @@ def profile_report(environ) -> list[str]:
         config = resolved.config
         metadata = config.csv_path if getattr(config, "ljspeech", False) else config.metadata_path
         lines.append(
-            "profile {name}: turbo={turbo} nano={nano} output={output} metadata={metadata} "
-            "workers={workers} batch={batch} epochs={epochs} lora_r={rank} "
-            "logging_steps={logging} blocked={blocked}".format(
+            "profile {name}: turbo={turbo} nano={nano} model={model} model_override={override} "
+            "output={output} metadata={metadata} workers={workers} batch={batch} "
+            "epochs={epochs} lora_r={rank} logging_steps={logging} blocked={blocked}".format(
                 name=name,
                 turbo=config.is_turbo,
                 nano=config.is_nano,
+                model=config.model_dir,
+                override=resolved.model_dir_override,
                 output=config.output_dir,
                 metadata=metadata,
                 workers=config.dataloader_num_workers,

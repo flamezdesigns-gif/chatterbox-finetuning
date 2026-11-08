@@ -6,6 +6,12 @@ if "%TTS_ROOT%"=="" (
   echo Set TTS_ROOT to the relocated tts directory, then run this script again.
   exit /b 1
 )
+if "%TTS_MODEL_DIR%"=="" (
+  echo TTS_MODEL_DIR is unset. Dustin reads pretrained_models inside this checkout.
+  echo A sibling checkout must set TTS_MODEL_DIR to the existing standard base weights.
+) else (
+  echo Using read-only TTS_MODEL_DIR. Setup will not modify it.
+)
 
 for %%I in ("%~dp0..\..") do set "REPO=%%~fI"
 set "VENV=%TTS_ROOT%\venv-dustin-py312"

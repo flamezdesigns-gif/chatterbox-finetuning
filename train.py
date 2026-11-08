@@ -1,10 +1,15 @@
 import os
 import sys
+
+from src.runtime_patches import apply_training_patches
+
+apply_training_patches()
+
 import torch
 from transformers import Trainer, TrainingArguments
 from safetensors.torch import save_file
 
-from src.config import TrainConfig
+from src.deployment import SafetyError, prepare_training_run
 from src.dataset import ChatterboxDataset, data_collator_turbo, data_collator_standart
 from src.model import resize_and_load_t3_weights, ChatterboxTrainerWrapper
 from src.preprocess_ljspeech import preprocess_dataset_ljspeech
@@ -28,9 +33,25 @@ def count_params(model, trainable_only=False):
 
 def main():
 
-    cfg = TrainConfig()
+    try:
+        resolved = prepare_training_run()
+    except SafetyError as exc:
+        logger.error("%s", exc)
+        sys.exit(2)
+    cfg = resolved.config
 
     mode_name = "CHATTERBOX-NANO" if cfg.is_nano else "CHATTERBOX-TURBO" if cfg.is_turbo else "CHATTERBOX-TTS"
+    logger.info("Profile: %s", resolved.profile)
+    logger.info("Metadata: %s", cfg.csv_path if cfg.ljspeech else cfg.metadata_path)
+    logger.info("WAV directory: %s", cfg.wav_dir)
+    logger.info("Preprocess directory: %s", cfg.preprocessed_dir)
+    logger.info("Output directory: %s", cfg.output_dir)
+    if resolved.profile == "dustin":
+        logger.warning(
+            "Dustin profile is an experimental standard-model LoRA run for a very short recording. "
+            "It does not promise a robust audiobook voice. max_speech_len=%s",
+            cfg.max_speech_len,
+        )
     logger.info("--- Starting Chatterbox Finetuning ---")
     logger.info(f"Mode: {mode_name}")
     logger.info(f"Training Strategy: {'LoRA' if cfg.is_lora else 'Full Fine-Tune'}")

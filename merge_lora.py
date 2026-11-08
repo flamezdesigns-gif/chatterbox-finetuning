@@ -2,7 +2,11 @@ import os
 from safetensors.torch import save_file
 from peft import PeftModel
 
-from src.config import TrainConfig
+from src.runtime_patches import apply_perth_fallback
+
+apply_perth_fallback()
+
+from src.deployment import SafetyError, assert_safe_to_train, build_resolved
 from src.model import resize_and_load_t3_weights
 from src.utils import setup_logger
 
@@ -15,8 +19,15 @@ logger = setup_logger("ChatterboxMerge")
 
 def main():
 
-    cfg = TrainConfig()
+    try:
+        resolved = build_resolved()
+        assert_safe_to_train(resolved)
+    except SafetyError as exc:
+        logger.error("%s", exc)
+        raise SystemExit(2)
+    cfg = resolved.config
     logger.info("--- Starting LoRA Merge Process ---")
+    logger.info("Profile: %s", resolved.profile)
 
     adapter_dir = os.path.join(cfg.output_dir, "new_lang_adapter")
     output_file = os.path.join(cfg.output_dir, cfg.merged_filename)

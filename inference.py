@@ -6,9 +6,13 @@ import soundfile as sf
 import torch
 from safetensors.torch import load_file
 
+from src.runtime_patches import apply_perth_fallback
+
+apply_perth_fallback()
+
 from src.model import resize_and_load_t3_weights
 from src.utils import setup_logger, trim_silence_with_vad, load_t3_state
-from src.config import TrainConfig
+from src.deployment import SafetyError, assert_safe_to_load, build_resolved
 from src.chatterbox_.tts import ChatterboxTTS
 from src.chatterbox_.tts_turbo import ChatterboxTurboTTS
 from src.chatterbox_.models.t3.t3 import T3
@@ -16,7 +20,12 @@ from src.chatterbox_.models.t3.t3 import T3
 
 logger = setup_logger("Chatterbox-Inference")
 
-cfg = TrainConfig()
+try:
+    RESOLVED = build_resolved()
+    assert_safe_to_load(RESOLVED)
+except SafetyError as exc:
+    raise SystemExit(str(exc))
+cfg = RESOLVED.config
 
 IS_TURBO = cfg.is_turbo
 IS_LORA = cfg.is_lora
@@ -43,7 +52,7 @@ else:
 
 TEXT_TO_SAY = "Merhaba, sesimi geliştirmem oldukça uzun zaman aldı ve şimdi sahip olduğuma göre, sessiz kalmayacağım."
 AUDIO_PROMPT = cfg.inference_prompt_path
-OUTPUT_FILE = "./output.wav"
+OUTPUT_FILE = "./output.wav" if RESOLVED.profile == "upstream" else os.path.join(OUTPUT_DIR, "inference.wav")
 
 
 # -----------------------------------------------------------------------------

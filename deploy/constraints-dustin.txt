@@ -1,0 +1,9 @@
+# Holds the CUDA 12.8 Torch build in place. A later pip command must not
+# replace it with the default PyPI torch 2.11.0 (CUDA 13 metadata) or with
+# chatterbox-tts's torch==2.6.0 pin.
+setuptools==81.0.0
+numpy==1.26.4
+sympy==1.13.3
+torch==2.11.0+cu128
+torchaudio==2.11.0+cu128
+torchvision==0.26.0+cu128

@@ -12,13 +12,14 @@ from src.chatterbox_.tts import ChatterboxTTS, punc_norm
 from src.chatterbox_.tts_turbo import ChatterboxTurboTTS
 from src.chatterbox_.models.s3tokenizer import S3_SR
 from src.utils import setup_logger, check_preprocess_meta, write_preprocess_meta
-from src.config import TrainConfig
+from src.deployment import SafetyError, assert_config_writable, prepare_training_run
 
 
 logger = setup_logger(__name__)
 
 
 def preprocess_dataset_ljspeech(config, tts_engine: ChatterboxTTS):
+    assert_config_writable(config)
 
     data = pd.read_csv(config.csv_path, sep="|", header=None, quoting=3)
 
@@ -126,8 +127,13 @@ def preprocess_dataset_ljspeech(config, tts_engine: ChatterboxTTS):
 
 
 if __name__ == "__main__":
-
-    cfg = TrainConfig()
+    from src.runtime_patches import apply_training_patches
+    apply_training_patches()
+    try:
+        cfg = prepare_training_run().config
+    except SafetyError as exc:
+        logger.error("%s", exc)
+        raise SystemExit(2)
 
     EngineClass = ChatterboxTurboTTS if cfg.is_turbo else ChatterboxTTS
 

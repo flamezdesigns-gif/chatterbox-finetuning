@@ -1,7 +1,16 @@
 import os
-import requests
 import sys
+
+from src.deployment import protected_reason
+
+if __name__ == "__main__" and os.environ.get("TTS_ALLOW_SETUP") != "1":
+    print("Refusing to download or write model files.")
+    print("Set TTS_ALLOW_SETUP=1 to run the existing setup downloader.")
+    print("Existing weight files are left untouched.")
+    raise SystemExit(2)
+
 import json
+import requests
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from src.config import TrainConfig
@@ -179,6 +188,10 @@ def test_merge_tokenizer_process(tokenizer_path):
 def main():
 
     print("--- Chatterbox Pretrained Model Setup ---\n")
+    blocked = protected_reason(DEST_DIR)
+    if blocked:
+        print(f"Refusing to write model files to {DEST_DIR} ({blocked}).")
+        raise SystemExit(2)
 
     # 1. Create the directory if it doesn't exist
     if not os.path.exists(DEST_DIR):

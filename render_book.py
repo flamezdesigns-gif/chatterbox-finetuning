@@ -72,11 +72,10 @@ def main(argv=None):
 
     apply_training_patches()
     import inference as I
-    import src.chatterbox_.models.t3.inference.alignment_stream_analyzer as analyzer
-
-    analyzer.AlignmentStreamAnalyzer.step = lambda self, logits, next_token=None: logits
+    from src.runtime_patches import apply_noalign
 
     engine = I.load_finetuned_engine_lora("cuda")
+    print(apply_noalign(engine))
     for module in engine.t3.modules():
         module_config = getattr(module, "config", None)
         if module_config is not None and hasattr(module_config, "_attn_implementation"):

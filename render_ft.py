@@ -68,9 +68,9 @@ def main(argv=None):
         chunks.append(current)
 
     if os.environ.get("NOALIGN"):
-        import src.chatterbox_.models.t3.inference.alignment_stream_analyzer as analyzer
+        from src.runtime_patches import apply_noalign
 
-        analyzer.AlignmentStreamAnalyzer.step = lambda self, logits, next_token=None: logits
+        print(apply_noalign(engine))
 
     import numpy as np
     import soundfile as sf
